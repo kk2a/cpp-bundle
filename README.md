@@ -22,11 +22,11 @@
 
 3. 実行
     ```bash
-    cargo run <source_cpp> [options]
+    cargo run <source_cpp> <include_path> <user_list> <author> [options]
     ```
     例:
     ```bash
-    cargo run example.cpp --clip
+    cargo run example.cpp /usr/include "user1,user2" "author1" --clip
     ```
 
 ## オプション

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use regex::Regex;
 use std::collections::HashSet;
 use clipboard::{ClipboardContext, ClipboardProvider};
+use chrono::Local;
 
 fn good_path(path: &str) -> PathBuf {
     Path::new(path).canonicalize().unwrap()
@@ -14,16 +15,18 @@ struct IncludeFile {
     file_path: PathBuf,
     include_path: PathBuf,
     user_list: Vec<String>,
-    re: Regex
+    re: Regex,
+    author: String,
 }
 
 impl IncludeFile {
-    fn new(file_path: &str, include_path: &str, user_list: Vec<String>) -> Self {
+    fn new(file_path: &str, include_path: &str, user_list: Vec<String>, author: String) -> Self {
         Self {
             file_path: good_path(file_path),
             include_path: good_path(include_path),
             user_list,
-            re: Regex::new(r"\s+").unwrap()
+            re: Regex::new(r"\s+").unwrap(),
+            author,
         }
     }
 
@@ -88,6 +91,11 @@ impl IncludeFile {
         rec(&self.file_path, &mut file_path_set, &mut lines, self);
 
         lines.push_str("// converted!!\n");
+        let now = Local::now();
+        let formatted_time = now.format("%Y-%m-%d %H:%M:%S").to_string();
+        lines.push_str(&format!("// Author: {}\n", self.author));
+        lines.push_str(&format!("// {}\n", formatted_time));
+
         if write {
             let mut file = File::create(&self.file_path).unwrap();
             file.write_all(lines.as_bytes()).unwrap();
@@ -101,13 +109,23 @@ impl IncludeFile {
 
 fn main() {
     let matches = App::new("cpp-bundle")
-        .version("1.0")
-        .author("Your Name <your.email@example.com>")
         .about("Bundles C++ files")
         .arg(Arg::new("input")
             .help("Sets the input file to use")
             .required(true)
             .index(1))
+        .arg(Arg::new("include_path")
+            .help("Sets the include path")
+            .required(true)
+            .index(2))
+        .arg(Arg::new("user_list")
+            .help("Sets the user list, comma separated")
+            .required(true)
+            .index(3))
+        .arg(Arg::new("author") 
+            .help("Sets the author name")
+            .required(true)
+            .index(4))
         .arg(Arg::new("clip")
             .help("Copies the output to the clipboard")
             .short('c')
@@ -119,12 +137,13 @@ fn main() {
         .get_matches();
 
     let input_file = matches.value_of("input").unwrap();
+    let include_path = matches.value_of("include_path").unwrap();
+    let user_list: Vec<String> = matches.value_of("user_list").unwrap().split(',').map(|s| s.to_string()).collect();
+    let author = matches.value_of("author").unwrap();
     let clip = matches.is_present("clip");
     let write = matches.is_present("write");
 
-    let include_path = "C:/Users/include/";
-    let user_list = vec!["kk2".to_string()];
-    let include_obj = IncludeFile::new(input_file, include_path, user_list);
+    let include_obj = IncludeFile::new(input_file, include_path, user_list, author.to_string());
     
     let start = std::time::Instant::now();
     include_obj.expand(write, clip);
