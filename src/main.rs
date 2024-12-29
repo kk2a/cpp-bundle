@@ -94,7 +94,7 @@ impl IncludeFile {
         let now = Local::now();
         let formatted_time = now.format("%Y-%m-%d %H:%M:%S").to_string();
         lines.push_str(&format!("// Author: {}\n", self.author));
-        lines.push_str(&format!("// {}\n", formatted_time));
+        lines.push_str(&format!("// {}\n\n", formatted_time));
 
         if write {
             let mut file = File::create(&self.file_path).unwrap();
