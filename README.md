@@ -22,14 +22,29 @@
 
 3. 実行
     ```bash
-    cargo run <source_cpp> <include_path> <user_list> <author> [options]
+    cargo run <input_file> <include_path> <author> [options]
     ```
     例:
     ```bash
-    cargo run example.cpp /usr/include "user1,user2" "author1" --clip
+    cargo run example.cpp /usr/include "Your Name" --clip
     ```
 
 ## オプション
 
-- `--clip`: バンドルした結果をクリップボードにコピーします．
-- `--write`: バンドルした結果を指定したファイルに出力します．
+- `--clip`, `-c`: バンドルした結果をクリップボードにコピーします
+- `--write`, `-w`: バンドルした結果を入力ファイルに上書き出力します
+- `--no-format`: コードのフォーマット（空白の整理や改行の削除）を無効にします
+
+## フォーマットの制御
+コード内で特定の領域のフォーマットを制御したい場合は，以下の特殊コメントを使用できます：
+
+```cpp
+// BEGIN_PRESERVE_NEWLINES
+#define COMPLEX_MACRO(x) \
+    do { \
+        something(); \
+    } while(0)
+// END_PRESERVE_NEWLINES
+```
+
+この範囲内では改行と空白が保持されます．マクロの定義などで使用してください．
