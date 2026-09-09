@@ -20,13 +20,19 @@
     cargo build
     ```
 
+ライブラリの場所を環境変数に設定します．
+
+```bash
+export CP_LIBRARY_PATH="$HOME/cp/lib"
+```
+
 3. 実行
     ```bash
-    cargo run <input_file> <include_path> <author> [options]
+    cargo run -- <input_file> <author> [options]
     ```
     例:
     ```bash
-    cargo run example.cpp /usr/include "Your Name" --clip
+    cargo run -- example.cpp "Your Name" --clip
     ```
 
 ## オプション

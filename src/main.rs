@@ -1,14 +1,58 @@
-use clap::{Arg, App};
+use chrono::Local;
+use clap::{App, Arg};
+use clipboard::{ClipboardContext, ClipboardProvider};
+use regex::Regex;
+use std::collections::HashSet;
+use std::env;
 use std::fs::File;
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
-use regex::Regex;
-use std::collections::HashSet;
-use clipboard::{ClipboardContext, ClipboardProvider};
-use chrono::Local;
+use std::process::{Command, Stdio};
 
 fn good_path(path: &str) -> PathBuf {
-    Path::new(path).canonicalize().unwrap()
+    Path::new(path)
+        .canonicalize()
+        .unwrap_or_else(|error| panic!("failed to resolve path '{}': {}", path, error))
+}
+
+const LIBRARY_PATH_ENV: &str = "CP_LIBRARY_PATH";
+
+fn copy_to_clipboard(contents: &str) -> Result<(), String> {
+    // VS Code を WSL で実行している場合は、Windows 側のクリップボードを使う。
+    if env::var_os("WSL_INTEROP").is_some()
+        || env::var_os("WSL_DISTRO_NAME").is_some()
+        || Path::new("/mnt/c/windows/system32/clip.exe").exists()
+    {
+        // clip.exe は WSL からの日本語を安定して扱えるよう UTF-16LE で受け取る。
+        // BOM はクリップボードの先頭に混入するため付けない。
+        let utf16: Vec<u8> = contents
+            .encode_utf16()
+            .flat_map(|unit| unit.to_le_bytes())
+            .collect();
+        let mut child = Command::new("clip.exe")
+            .stdin(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("failed to start clip.exe: {}", error))?;
+        child
+            .stdin
+            .take()
+            .ok_or_else(|| "failed to open clip.exe stdin".to_string())?
+            .write_all(&utf16)
+            .map_err(|error| format!("failed to write to clip.exe: {}", error))?;
+        let status = child
+            .wait()
+            .map_err(|error| format!("failed to wait for clip.exe: {}", error))?;
+        if status.success() {
+            return Ok(());
+        }
+        return Err(format!("clip.exe exited with status {}", status));
+    }
+
+    let mut context: ClipboardContext = ClipboardProvider::new()
+        .map_err(|error| format!("failed to access clipboard: {}", error))?;
+    context
+        .set_contents(contents.to_string())
+        .map_err(|error| format!("failed to set clipboard contents: {}", error))
 }
 
 struct IncludeFile {
@@ -16,7 +60,7 @@ struct IncludeFile {
     include_path: PathBuf,
     re: Regex,
     author: String,
-    format_enabled: bool,  // 追加: フォーマットの有効/無効を制御
+    format_enabled: bool, // 追加: フォーマットの有効/無効を制御
 }
 
 impl IncludeFile {
@@ -58,7 +102,7 @@ impl IncludeFile {
                                 &include_obj.get_include_path(&line, cur_file_path).unwrap(),
                                 file_path_set,
                                 system_headers,
-                                include_obj
+                                include_obj,
                             );
                         }
                     }
@@ -66,7 +110,12 @@ impl IncludeFile {
             }
         }
 
-        rec_collect(&self.file_path, &mut file_path_set, &mut system_headers, self);
+        rec_collect(
+            &self.file_path,
+            &mut file_path_set,
+            &mut system_headers,
+            self,
+        );
         (system_headers, file_path_set)
     }
 
@@ -75,12 +124,16 @@ impl IncludeFile {
         let trimmed = replaced.trim();
 
         if trimmed.starts_with("#include\"") {
-            let path_str = trimmed.trim_start_matches("#include\"").trim_end_matches("\"");
+            let path_str = trimmed
+                .trim_start_matches("#include\"")
+                .trim_end_matches("\"");
             return Some(cur_file_path.parent().unwrap().join(path_str));
         }
 
         if trimmed.starts_with("#include<") {
-            let path_str = trimmed.trim_start_matches("#include<").trim_end_matches(">");
+            let path_str = trimmed
+                .trim_start_matches("#include<")
+                .trim_end_matches(">");
             let include_path = self.include_path.join(path_str);
             if include_path.exists() {
                 return Some(include_path);
@@ -94,7 +147,12 @@ impl IncludeFile {
         line.trim().starts_with("#pragma once")
     }
 
-    fn format_line(&self, line: &str, buffer_ends_with_newline: bool, preserve_newlines: bool) -> (String, bool) {
+    fn format_line(
+        &self,
+        line: &str,
+        buffer_ends_with_newline: bool,
+        preserve_newlines: bool,
+    ) -> (String, bool) {
         // フォーマットが無効の場合は元の行をそのまま返す
         if !self.format_enabled {
             return (format!("{}\n", line), true);
@@ -103,9 +161,9 @@ impl IncludeFile {
         // 改行保持モードでは空行も保持する
         if preserve_newlines {
             if buffer_ends_with_newline {
-                return (format!("{}\n", line), true)
+                return (format!("{}\n", line), true);
             } else {
-                return (format!("\n{}\n", line), true)
+                return (format!("\n{}\n", line), true);
             }
         }
 
@@ -177,10 +235,20 @@ impl IncludeFile {
                     if include_obj.is_pragma_once(&line) {
                         continue;
                     }
-                    if let Some(included_file_path) = include_obj.get_include_path(&line, cur_file_path) {
-                        rec(&included_file_path, file_path_set, lines, include_obj, ends_with_newline, preserve_newlines);
+                    if let Some(included_file_path) =
+                        include_obj.get_include_path(&line, cur_file_path)
+                    {
+                        rec(
+                            &included_file_path,
+                            file_path_set,
+                            lines,
+                            include_obj,
+                            ends_with_newline,
+                            preserve_newlines,
+                        );
                     } else if !line.trim().starts_with("#include") {
-                        let (formatted, ends_nl) = include_obj.format_line(&line, *ends_with_newline, *preserve_newlines);
+                        let (formatted, ends_nl) =
+                            include_obj.format_line(&line, *ends_with_newline, *preserve_newlines);
                         if !formatted.is_empty() {
                             lines.push_str(&formatted);
                             if !ends_nl {
@@ -197,7 +265,14 @@ impl IncludeFile {
 
         let mut ends_with_newline = true;
         let mut preserve_newlines = false;
-        rec(&self.file_path, &mut file_path_set, &mut lines, self, &mut ends_with_newline, &mut preserve_newlines);
+        rec(
+            &self.file_path,
+            &mut file_path_set,
+            &mut lines,
+            self,
+            &mut ends_with_newline,
+            &mut preserve_newlines,
+        );
 
         if !ends_with_newline {
             lines.push('\n');
@@ -214,8 +289,7 @@ impl IncludeFile {
             file.write_all(lines.as_bytes()).unwrap();
         }
         if clip {
-            let mut ctx: ClipboardContext = ClipboardProvider::new().unwrap();
-            ctx.set_contents(lines).unwrap();
+            copy_to_clipboard(&lines).unwrap_or_else(|error| panic!("{}", error));
         }
     }
 }
@@ -223,40 +297,57 @@ impl IncludeFile {
 fn main() {
     let matches = App::new("cpp-bundle")
         .about("Bundles C++ files")
-        .arg(Arg::new("input")
-            .help("Sets the input file to use")
-            .required(true)
-            .index(1))
-        .arg(Arg::new("include_path")
-            .help("Sets the include path")
-            .required(true)
-            .index(2))
-        .arg(Arg::new("author") 
-            .help("Sets the author name")
-            .required(true)
-            .index(3))
-        .arg(Arg::new("clip")
-            .help("Copies the output to the clipboard")
-            .short('c')
-            .long("clip"))
-        .arg(Arg::new("write")
-            .help("Writes the output to the file")
-            .short('w')
-            .long("write"))
-        .arg(Arg::new("no-format")  // 追加: フォーマット無効化オプション
-            .help("Disables code formatting")
-            .long("no-format"))
+        .arg(
+            Arg::new("input")
+                .help("Sets the input file to use")
+                .required(true)
+                .index(1),
+        )
+        .arg(
+            Arg::new("author")
+                .help("Sets the author name")
+                .required(true)
+                .index(2),
+        )
+        .arg(
+            Arg::new("clip")
+                .help("Copies the output to the clipboard")
+                .short('c')
+                .long("clip"),
+        )
+        .arg(
+            Arg::new("write")
+                .help("Writes the output to the file")
+                .short('w')
+                .long("write"),
+        )
+        .arg(
+            Arg::new("no-format") // 追加: フォーマット無効化オプション
+                .help("Disables code formatting")
+                .long("no-format"),
+        )
         .get_matches();
 
     let input_file = matches.value_of("input").unwrap();
-    let include_path = matches.value_of("include_path").unwrap();
     let author = matches.value_of("author").unwrap();
+    let include_path = env::var(LIBRARY_PATH_ENV).unwrap_or_else(|_| {
+        eprintln!(
+            "{} must be set to the C++ library directory",
+            LIBRARY_PATH_ENV
+        );
+        std::process::exit(1);
+    });
     let clip = matches.is_present("clip");
     let write = matches.is_present("write");
-    let format_enabled = !matches.is_present("no-format");  // フォーマットフラグの設定
+    let format_enabled = !matches.is_present("no-format"); // フォーマットフラグの設定
 
-    let include_obj = IncludeFile::new(input_file, include_path, author.to_string(), format_enabled);
-    
+    let include_obj = IncludeFile::new(
+        input_file,
+        &include_path,
+        author.to_string(),
+        format_enabled,
+    );
+
     let start = std::time::Instant::now();
     include_obj.expand(write, clip);
     let end = std::time::Instant::now();
